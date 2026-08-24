@@ -11,6 +11,7 @@ A small Tkinter GUI to control a DMX derby/laser fixture over a USB-DMX adapter 
 - Non-blocking connect: opening the serial port runs in a background thread, so the GUI never freezes while connecting.
 - Detects connection loss (e.g. adapter unplugged) during operation and reports it instead of failing silently.
 - One-click blackout
+- Three selectable color themes (purple / blue / black-white) via a config toggle at the top of the file.
 
 ## Requirements
 
