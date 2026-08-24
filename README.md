@@ -1,6 +1,7 @@
 # DMX Derby Controller
 
 A small Tkinter GUI to control a DMX derby/laser fixture over a USB-DMX adapter — one slider per channel, live plain-text readout of what each value actually does, and a blackout button.
+
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
