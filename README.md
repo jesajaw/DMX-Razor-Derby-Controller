@@ -13,6 +13,11 @@ A small Tkinter GUI to control a DMX derby/laser fixture over a USB-DMX adapter 
 - One-click blackout
 - Three selectable color themes (purple / blue / black-white) via a config toggle at the top of the file.
 
+## Todo
+- Presets: load and safe .json for channel settins
+- Music Mode: pyaudiowpatch -> FFT numpy -> Bass/Mid/Treble
+
+
 ## Requirements
 
 - Python 3.10+ as installed through [requirements.txt](requirements.txt)
