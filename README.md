@@ -28,7 +28,7 @@ pip install -r requirements.txt
 ## Usage
 
 ```bash
-python dmx-controller.py
+python DMX-Controller.py
 ```
 
 1. Select the COM port your USB-DMX adapter is connected to.
