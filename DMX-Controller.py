@@ -2,37 +2,34 @@
 DMX Derby Controller
 =====================
 
-Tkinter GUI for a DMX derby/laser fixture via a USB-DMX adapter
+Tkinter GUI to control a Razor Derby over a USB-DMX adapter
 (RS485, 250000 baud, 2 stop bits).
 
 Threading model
 ----------------
-- Connecting (serial.Serial(...)) runs in a worker thread since
-  opening a COM port can block.
-- The DMX send cycle runs in its own background thread while connected.
-- All GUI updates from background threads go through root.after(...),
-  since Tkinter widgets must only be touched from the main thread.
-- Write failures during the send loop (e.g. adapter unplugged) are
-  caught and reported as a connection loss. This checks the USB link
-  to the adapter, not the DMX cable itself -- DMX512 is unidirectional
-  and gives no feedback from the fixture end.
+- Connecting (serial.Serial(...)) runs in a worker thread since opening a COM port can block
+- DMX send cycle runs in its own background thread while connected
+- All GUI updates from background threads go through root.after(...), since Tkinter widgets must only be touched from main thread
+- Write failures during the send loop (e.g. adapter unplugged) are caught and reported as a connection loss. This checks the USB link to the adapter, not the DMX cable itself -- DMX512 is unidirectional and gives no feedback from the fixture end.
 """
 
 import threading
 import time
+import serial, serial.tools.list_ports
 import tkinter as tk
 from tkinter import ttk, messagebox
-import serial
-import serial.tools.list_ports
 
 
-# --- Theme (dark grey / purple) ---
-COLOR_BG = "#1e1e24"
-COLOR_BG_LIGHT = "#2a2a33"
-COLOR_FG = "#e0dff0"
-COLOR_PURPLE = "#9b59d9"
-COLOR_PURPLE_DARK = "#6c3fa0"
-COLOR_STATUS_TEXT = "#c9a6f5"
+# Theme — uncomment ONE block, comment out the others
+# dark grey / purple
+COLOR_BG = "#1e1e24"; COLOR_BG_LIGHT = "#2a2a33"; COLOR_FG = "#e0dff0"; COLOR = "#9b59d9"; COLOR_DARK = "#6c3fa0"; COLOR_STATUS_TEXT = "#c9a6f5"
+
+# dark grey / blue
+# COLOR_BG = "#1e1e24"; COLOR_BG_LIGHT = "#2a2a33"; COLOR_FG = "#e0dff0"; COLOR = "#4a90d9"; COLOR_DARK = "#2f5f9e"; COLOR_STATUS_TEXT = "#a6c9f5"
+
+# black / white
+# COLOR_BG = "#000000"; COLOR_BG_LIGHT = "#1a1a1a"; COLOR_FG = "#ffffff"; COLOR = "#ffffff"; COLOR_DARK = "#808080"; COLOR_STATUS_TEXT = "#d9d9d9"
+
 
 # Fixed cell size so the layout never reflows when status text changes
 # (avoids jank while dragging sliders).
@@ -42,7 +39,7 @@ STATUS_LABEL_CHARS = 32
 
 CHANNEL_COUNT = 9
 UNIVERSE_SIZE = 513  # channel 0 unused, DMX starts at 1
-SEND_INTERVAL_S = 0.03  # ~33 Hz
+SEND_INTERVAL_S = 0.03  # ca. 33 Hz
 
 
 class DMXController:
@@ -111,107 +108,100 @@ class DMXGuiApp:
         self._build_connection_bar()
         self._build_channel_grid()
 
-    # ------------------------------------------------------------
-    # Channel value -> human-readable state
-    # ------------------------------------------------------------
+# ------------------------------------------------------------
+# channel value -> readable state
+# ------------------------------------------------------------
     @staticmethod
-    def describe(ch: int, val: int) -> str:
-        if ch == 1:
-            if val <= 9: return f"{val} | Manual (Blackout/Ch.3 active)"
-            if val <= 44: return f"{val} | Derby + Laser + Strobe"
-            if val <= 79: return f"{val} | Derby + Strobe"
-            if val <= 114: return f"{val} | Derby + Laser"
-            if val <= 149: return f"{val} | Laser + Strobe"
-            if val <= 184: return f"{val} | Derby Effect"
-            if val <= 219: return f"{val} | Laser Effect"
-            return f"{val} | Strobe Effect"
-        if ch == 2:
-            if val <= 250: return f"{val} | Speed: {int(val / 250 * 100)}%"
-            return f"{val} | Sound Control"
-        if ch == 3:
-            if val <= 5: return f"{val} | Off"
-            if val <= 20: return f"{val} | Red"
-            if val <= 35: return f"{val} | Green"
-            if val <= 50: return f"{val} | Blue"
-            if val <= 65: return f"{val} | White"
-            if val <= 80: return f"{val} | Red + Green"
-            if val <= 95: return f"{val} | Red + Blue"
-            if val <= 110: return f"{val} | Red + White"
-            if val <= 125: return f"{val} | Green + Blue"
-            if val <= 140: return f"{val} | Green + White"
-            if val <= 155: return f"{val} | Blue + White"
-            if val <= 170: return f"{val} | Red + Green + Blue"
-            if val <= 185: return f"{val} | Red + Green + White"
-            if val <= 200: return f"{val} | Green + Blue + White"
-            if val <= 215: return f"{val} | RGBW (All)"
-            if val <= 230: return f"{val} | Auto Color (4)"
-            return f"{val} | Auto Color (7)"
-        if ch == 4:
-            if val <= 5: return f"{val} | Strobe Off"
-            return f"{val} | Derby Strobe Rate: {int(val / 255 * 100)}%"
-        if ch == 5:
-            if val == 0: return f"{val} | Motor Stopped"
-            if val <= 127: return f"{val} | Manual Position: {val}"
-            return f"{val} | Rotation Speed: {int((val - 128) / 127 * 100)}%"
-        if ch == 6:
-            if val <= 9: return f"{val} | Blackout"
-            return f"{val} | Pattern {min(18, (val - 10) // 14 + 1)}"
-        if ch == 7:
-            if val <= 9: return f"{val} | Laser Off"
-            if val <= 49: return f"{val} | Red"
-            if val <= 89: return f"{val} | Green"
-            if val <= 129: return f"{val} | Red + Green"
-            if val <= 169: return f"{val} | Red + Strobe Green"
-            if val <= 209: return f"{val} | Green + Strobe Red"
-            return f"{val} | Red + Green (Strobe)"
-        if ch == 8:
-            if val <= 9: return f"{val} | Laser Strobe Off"
-            if val <= 254: return f"{val} | Laser Strobe Rate: {int(val / 254 * 100)}%"
-            return f"{val} | Sound-Controlled Strobe"
-        if ch == 9:
-            if val <= 4: return f"{val} | Stopped"
-            if val <= 127: return f"{val} | Rotation CW"
-            if val <= 133: return f"{val} | Stopped"
-            return f"{val} | Rotation CCW"
-        return f"{val}"
+    def describe(channel: int, value: int) -> str:
+        if channel == 1:
+            if value <= 9:    return f"{value} | Manual (Blackout/Ch.3 active)"
+            if value <= 44:   return f"{value} | Derby + Laser + Strobe"
+            if value <= 79:   return f"{value} | Derby + Strobe"
+            if value <= 114:  return f"{value} | Derby + Laser"
+            if value <= 149:  return f"{value} | Laser + Strobe"
+            if value <= 184:  return f"{value} | Derby Effect"
+            if value <= 219:  return f"{value} | Laser Effect"
+            return f"{value} | Strobe Effect"
+        if channel == 2:
+            if value <= 250:  return f"{value} | Speed: {int(value / 250 * 100)}%"
+            return f"{value} | Sound Control"
+        if channel == 3:
+            if value <= 5:    return f"{value} | Off"
+            if value <= 20:   return f"{value} | Red"
+            if value <= 35:   return f"{value} | Green"
+            if value <= 50:   return f"{value} | Blue"
+            if value <= 65:   return f"{value} | White"
+            if value <= 80:   return f"{value} | Red + Green"
+            if value <= 95:   return f"{value} | Red + Blue"
+            if value <= 110:  return f"{value} | Red + White"
+            if value <= 125:  return f"{value} | Green + Blue"
+            if value <= 140:  return f"{value} | Green + White"
+            if value <= 155:  return f"{value} | Blue + White"
+            if value <= 170:  return f"{value} | Red + Green + Blue"
+            if value <= 185:  return f"{value} | Red + Green + White"
+            if value <= 200:  return f"{value} | Green + Blue + White"
+            if value <= 215:  return f"{value} | RGBW (All)"
+            if value <= 230:  return f"{value} | Auto Color (4)"
+            return f"{value} | Auto Color (7)"
+        if channel == 4:
+            if value <= 5:    return f"{value} | Strobe Off"
+            return f"{value} | Derby Strobe Rate: {int(value / 255 * 100)}%"
+        if channel == 5:
+            if value == 0:    return f"{value} | Motor Stopped"
+            if value <= 127:  return f"{value} | Manual Position: {value}"
+            return f"{value} | Rotation Speed: {int((value - 128) / 127 * 100)}%"
+        if channel == 6:
+            if value <= 9:    return f"{value} | Blackout"
+            return f"{value} | Pattern {min(18, (value - 10) // 14 + 1)}"
+        if channel == 7:
+            if value <= 9:    return f"{value} | Laser Off"
+            if value <= 49:   return f"{value} | Red"
+            if value <= 89:   return f"{value} | Green"
+            if value <= 129:  return f"{value} | Red + Green"
+            if value <= 169:  return f"{value} | Red + Strobe Green"
+            if value <= 209:  return f"{value} | Green + Strobe Red"
+            return f"{value} | Red + Green (Strobe)"
+        if channel == 8:
+            if value <= 9:    return f"{value} | Laser Strobe Off"
+            if value <= 254:  return f"{value} | Laser Strobe Rate: {int(value / 254 * 100)}%"
+            return f"{value} | Sound-Controlled Strobe"
+        if channel == 9:
+            if value <= 4:    return f"{value} | Stopped"
+            if value <= 127:  return f"{value} | Rotation CW"
+            if value <= 133:  return f"{value} | Stopped"
+            return f"{value} | Rotation CCW"
+        return f"{value}"
 
-    # ------------------------------------------------------------
-    # Styling
-    # ------------------------------------------------------------
+# ------------------------------------------------------------
+# Styling
+# ------------------------------------------------------------
     def _setup_style(self) -> None:
         style = ttk.Style()
         style.theme_use("clam")
 
         style.configure(".", background=COLOR_BG, foreground=COLOR_FG, font=("Segoe UI", 9))
         style.configure("TFrame", background=COLOR_BG)
-        style.configure("TLabelframe", background=COLOR_BG, foreground=COLOR_FG,
-                         bordercolor=COLOR_PURPLE_DARK)
-        style.configure("TLabelframe.Label", background=COLOR_BG, foreground=COLOR_PURPLE)
+        style.configure("TLabelframe", background=COLOR_BG, foreground=COLOR_FG, bordercolor=COLOR_DARK)
+        style.configure("TLabelframe.Label", background=COLOR_BG, foreground=COLOR)
         style.configure("TLabel", background=COLOR_BG, foreground=COLOR_FG)
 
-        style.configure("TButton", background=COLOR_BG_LIGHT, foreground=COLOR_FG,
-                         bordercolor=COLOR_PURPLE_DARK, focusthickness=1, padding=6)
-        style.map("TButton",
-                  background=[("active", COLOR_PURPLE_DARK), ("pressed", COLOR_PURPLE)],
-                  foreground=[("active", COLOR_FG)])
+        style.configure("TButton", background=COLOR_BG_LIGHT, foreground=COLOR_FG, bordercolor=COLOR_DARK, focusthickness=1, padding=6)
+        style.map("TButton", background=[("active", COLOR_DARK), ("pressed", COLOR)], foreground=[("active", COLOR_FG)])
 
-        style.configure("TCombobox", fieldbackground=COLOR_BG_LIGHT, background=COLOR_BG_LIGHT,
-                         foreground=COLOR_FG, arrowcolor=COLOR_PURPLE)
+        style.configure("TCombobox", fieldbackground=COLOR_BG_LIGHT, background=COLOR_BG_LIGHT, foreground=COLOR_FG, arrowcolor=COLOR)
         style.map("TCombobox", fieldbackground=[("readonly", COLOR_BG_LIGHT)])
         style.configure("Horizontal.TScale", background=COLOR_BG, troughcolor=COLOR_BG_LIGHT)
 
-        style.configure("Blackout.TButton", background=COLOR_PURPLE_DARK, foreground=COLOR_FG)
-        style.map("Blackout.TButton", background=[("active", COLOR_PURPLE)])
+        style.configure("Blackout.TButton", background=COLOR_DARK, foreground=COLOR_FG)
+        style.map("Blackout.TButton", background=[("active", COLOR)])
 
-        style.configure("Cell.TFrame", background=COLOR_BG_LIGHT, bordercolor=COLOR_PURPLE_DARK)
-        style.configure("Status.TLabel", background=COLOR_BG_LIGHT, foreground=COLOR_STATUS_TEXT,
-                         font=("Consolas", 9))
-        style.configure("CellTitle.TLabel", background=COLOR_BG_LIGHT, foreground=COLOR_FG,
-                         font=("Segoe UI", 9, "bold"))
+        style.configure("Cell.TFrame", background=COLOR_BG_LIGHT, bordercolor=COLOR_DARK)
+        style.configure("Status.TLabel", background=COLOR_BG_LIGHT, foreground=COLOR_STATUS_TEXT, font=("Consolas", 9))
+        style.configure("CellTitle.TLabel", background=COLOR_BG_LIGHT, foreground=COLOR_FG, font=("Segoe UI", 9, "bold"))
 
-    # ------------------------------------------------------------
-    # UI
-    # ------------------------------------------------------------
+# ------------------------------------------------------------
+# UI
+# ------------------------------------------------------------
     def _build_connection_bar(self) -> None:
         bar = ttk.LabelFrame(self.root, text="Connection", padding=10)
         bar.pack(fill="x", padx=10, pady=5)
@@ -233,12 +223,12 @@ class DMXGuiApp:
         grid.pack(fill="both", expand=True, padx=10, pady=5)
 
         for i in range(CHANNEL_COUNT):
-            ch = i + 1
+            channel = i + 1
             row, col = divmod(i, 3)
             grid.columnconfigure(col, weight=1)
-            self._build_cell(grid, row, col, ch, self.CHANNEL_NAMES[i])
+            self._build_cell(grid, row, col, channel, self.CHANNEL_NAMES[i])
 
-    def _build_cell(self, parent: ttk.Frame, row: int, col: int, ch: int, name: str) -> None:
+    def _build_cell(self, parent: ttk.Frame, row: int, col: int, channel: int, name: str) -> None:
         cell = ttk.Frame(parent, padding=5, relief="groove", style="Cell.TFrame")
         cell.grid(row=row, column=col, padx=5, pady=5, sticky="nsew")
         cell.pack_propagate(False)
@@ -249,32 +239,32 @@ class DMXGuiApp:
         status = ttk.Label(cell, text="---", style="Status.TLabel",
                             width=STATUS_LABEL_CHARS, anchor="w")
         status.pack(anchor="w", pady=(2, 5), fill="x")
-        self.channel_labels[ch] = status
+        self.channel_labels[channel] = status
 
         slider = ttk.Scale(cell, from_=0, to=255, orient="horizontal",
-                            command=lambda v, c=ch: self.on_slider_change(c, v))
+                            command=lambda v, c=channel: self.on_slider_change(c, v))
         slider.set(0)
         slider.pack(fill="x", expand=True)
-        self.sliders[ch] = slider
+        self.sliders[channel] = slider
 
-        self.update_display(ch, 0)
+        self.update_display(channel, 0)
 
-    # ------------------------------------------------------------
-    # Sliders
-    # ------------------------------------------------------------
-    def update_display(self, channel: int, val) -> None:
-        val_int = int(float(val))
+# ------------------------------------------------------------
+# Sliders
+# ------------------------------------------------------------
+    def update_display(self, channel: int, value) -> None:
+        val_int = int(float(value))
         self.channel_labels[channel].config(text=self.describe(channel, val_int))
 
-    def on_slider_change(self, channel: int, val) -> None:
-        val_int = int(float(val))
+    def on_slider_change(self, channel: int, value) -> None:
+        val_int = int(float(value))
         self.update_display(channel, val_int)
         if self.dmx:
             self.dmx.set_channel(channel, val_int)
 
-    # ------------------------------------------------------------
-    # Connection (non-blocking)
-    # ------------------------------------------------------------
+# ------------------------------------------------------------
+# Connection (non-blocking)
+# ------------------------------------------------------------
     def toggle_connection(self) -> None:
         if not self.is_sending:
             self.btn_connect.config(state="disabled")
@@ -287,8 +277,8 @@ class DMXGuiApp:
     def _connect_worker(self, port: str) -> None:
         try:
             dmx = DMXController(port)
-            for ch, slider in self.sliders.items():
-                dmx.set_channel(ch, int(slider.get()))
+            for channel, slider in self.sliders.items():
+                dmx.set_channel(channel, int(slider.get()))
             self.root.after(0, self._connect_success, dmx)
         except Exception as e:
             self.root.after(0, self._connect_failed, e, port)
@@ -320,15 +310,15 @@ class DMXGuiApp:
                 return
             time.sleep(SEND_INTERVAL_S)
 
-    # ------------------------------------------------------------
-    # Actions
-    # ------------------------------------------------------------
+# ------------------------------------------------------------
+# Actions
+# ------------------------------------------------------------
     def blackout(self) -> None:
-        for ch, slider in self.sliders.items():
+        for channel, slider in self.sliders.items():
             slider.set(0)
-            self.update_display(ch, 0)
+            self.update_display(channel, 0)
             if self.dmx:
-                self.dmx.set_channel(ch, 0)
+                self.dmx.set_channel(channel, 0)
 
     def stop_dmx(self) -> None:
         self.is_sending = False
