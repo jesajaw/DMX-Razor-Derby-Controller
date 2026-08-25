@@ -43,23 +43,29 @@ python DMX-Controller.py
 4. **BLACKOUT** sets all channels to 0 immediately.
 5. **Disconnect** stops sending and closes the port.
 
-## Channel Layout
+## Presets
 
-| Channel | Function              |
-|---------|-----------------------|
-| 1       | Show Select           |
-| 2       | Speed                 |
-| 3       | Derby Color           |
-| 4       | Derby Strobe          |
-| 5       | Derby Motor           |
-| 6       | Pattern               |
-| 7       | Laser Mode            |
-| 8       | Laser Strobe          |
-| 9       | Laser Rotation        |
+Channel setups can be saved and reloaded as presets, stored as individual JSON files in the `presets/` folder (created automatically on first run).
 
-Value ranges and their meaning per channel are implemented in
-`DMXGuiApp.describe()` and are specific to the fixture this was
-originally written for — adjust them to match your device's DMX chart.
+- **Save As...** — stores the current slider values under a name you choose
+- **Load** — applies the selected preset's values to all sliders (and live DMX output, if connected)
+- **Delete** — removes the selected preset
+
+Each preset is a plain JSON file (`presets/<name>.json`), so they can be copied, renamed, or shared individually:
+
+```json
+{
+  "1": 44,
+  "2": 180,
+  "3": 216,
+  "4": 0,
+  "5": 128,
+  "6": 60,
+  "7": 0,
+  "8": 254,
+  "9": 127
+}
+```
 
 ## Limitations
 
