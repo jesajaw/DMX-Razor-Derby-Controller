@@ -101,7 +101,7 @@ class DMXGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("DMX Derby Controller")
-        self.root.geometry("850x440")
+        self.root.geometry("850x525")
         self.root.configure(bg=COLOR_BG)
 
         self.dmx: DMXController | None = None
@@ -489,7 +489,6 @@ def ask_string(parent: tk.Tk, title: str, message: str) -> str | None:
     if dlg.result == "OK" and dlg.entry_value:
         return dlg.entry_value
     return None
-
 
 
 def main() -> None:
