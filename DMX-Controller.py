@@ -13,11 +13,14 @@ Threading model
 - Write failures during the send loop (e.g. adapter unplugged) are caught and reported as a connection loss. This checks the USB link to the adapter, not the DMX cable itself -- DMX512 is unidirectional and gives no feedback from the fixture end.
 """
 
+import json
 import threading
 import time
+from pathlib import Path
+
 import serial, serial.tools.list_ports
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 
 
 # Theme — uncomment ONE block, comment out the others
@@ -40,6 +43,8 @@ STATUS_LABEL_CHARS = 32
 CHANNEL_COUNT = 9
 UNIVERSE_SIZE = 513  # channel 0 unused, DMX starts at 1
 SEND_INTERVAL_S = 0.03  # ca. 33 Hz
+
+PRESETS_DIR = Path(__file__).parent / "presets" # used for json channel settings
 
 
 class DMXController:
@@ -78,7 +83,7 @@ class DMXController:
             pass
 
 
-class DMXGuiApp:
+class DMXGUI:
     """Tkinter UI for the DMX Derby Controller."""
 
     CHANNEL_NAMES = [
@@ -103,10 +108,12 @@ class DMXGuiApp:
         self.is_sending = False
         self.channel_labels: dict[int, ttk.Label] = {}
         self.sliders: dict[int, ttk.Scale] = {}
+        self.presets = PresetManager(PRESETS_DIR)
 
         self._setup_style()
         self._build_connection_bar()
         self._build_channel_grid()
+        self._build_preset_bar()
 
 # ------------------------------------------------------------
 # channel value -> readable state
@@ -191,6 +198,7 @@ class DMXGuiApp:
         style.configure("TCombobox", fieldbackground=COLOR_BG_LIGHT, background=COLOR_BG_LIGHT, foreground=COLOR_FG, arrowcolor=COLOR)
         style.map("TCombobox", fieldbackground=[("readonly", COLOR_BG_LIGHT)])
         style.configure("Horizontal.TScale", background=COLOR_BG, troughcolor=COLOR_BG_LIGHT)
+        style.configure("TEntry", fieldbackground=COLOR_BG_LIGHT, foreground=COLOR_FG,insertcolor=COLOR_FG)
 
         style.configure("Blackout.TButton", background=COLOR_DARK, foreground=COLOR_FG)
         style.map("Blackout.TButton", background=[("active", COLOR)])
@@ -249,6 +257,20 @@ class DMXGuiApp:
 
         self.update_display(channel, 0)
 
+    def _build_preset_bar(self) -> None:
+        bar = ttk.LabelFrame(self.root, text="Presets", padding=10)
+        bar.pack(fill="x", padx=10, pady=5)
+
+        self.preset_cb = ttk.Combobox(bar, values=self.presets.list_presets(),
+                                       width=20, state="readonly")
+        self.preset_cb.pack(side="left", padx=5)
+        if self.preset_cb["values"]:
+            self.preset_cb.current(0)
+
+        ttk.Button(bar, text="Load", command=self.load_preset).pack(side="left", padx=5)
+        ttk.Button(bar, text="Save As...", command=self.save_preset_as).pack(side="left", padx=5)
+        ttk.Button(bar, text="Delete", command=self.delete_preset).pack(side="left", padx=5)
+
 # ------------------------------------------------------------
 # Sliders
 # ------------------------------------------------------------
@@ -291,13 +313,13 @@ class DMXGuiApp:
 
     def _connect_failed(self, error: Exception, port: str) -> None:
         self.btn_connect.config(state="normal")
-        messagebox.showerror("Error", f"Could not open {port}:\n{error}")
+        show_error(self.root, "Error", f"Could not open {port}:\n{error}")
 
     def _connection_lost(self, error: Exception) -> None:
         self.is_sending = False
         self.dmx = None
         self.btn_connect.config(text="Connect", state="normal")
-        messagebox.showerror("Connection Lost", f"DMX connection interrupted:\n{error}")
+        show_error(self.root, "Connection Lost", f"DMX connection interrupted:\n{error}")
 
     def _send_loop(self) -> None:
         """Background send cycle. Exits and reports on write failure
@@ -313,6 +335,48 @@ class DMXGuiApp:
 # ------------------------------------------------------------
 # Actions
 # ------------------------------------------------------------
+    def refresh_preset_list(self, select: str | None = None) -> None:
+        names = self.presets.list_presets()
+        self.preset_cb["values"] = names
+        if select in names:
+            self.preset_cb.set(select)
+        elif names:
+            self.preset_cb.current(0)
+        else:
+            self.preset_cb.set("")
+
+    def save_preset_as(self) -> None:
+        name = ask_string(self.root, "Save Preset", "Preset name:")
+        if not name:
+            return
+        values = {ch: int(slider.get()) for ch, slider in self.sliders.items()}
+        self.presets.save(name, values)
+        self.refresh_preset_list(select=name)
+
+    def load_preset(self) -> None:
+        name = self.preset_cb.get()
+        if not name:
+            return
+        try:
+            values = self.presets.load(name)
+        except (OSError, json.JSONDecodeError) as e:
+            show_error(self.root, "Error", f"Could not load preset '{name}':\n{e}")
+            return
+        for ch, val in values.items():
+            if ch in self.sliders:
+                self.sliders[ch].set(val)
+                self.update_display(ch, val)
+                if self.dmx:
+                    self.dmx.set_channel(ch, val)
+
+    def delete_preset(self) -> None:
+        name = self.preset_cb.get()
+        if not name:
+            return
+        if ask_yes_no(self.root, "Delete Preset", f"Delete preset '{name}'?"):
+            self.presets.delete(name)
+            self.refresh_preset_list()
+
     def blackout(self) -> None:
         for channel, slider in self.sliders.items():
             slider.set(0)
@@ -330,10 +394,107 @@ class DMXGuiApp:
         self.stop_dmx()
         self.root.destroy()
 
+class PresetManager:
+    """Reads and writes channel presets, one JSON file per preset,
+    stored in a dedicated folder next to this script."""
+
+    def __init__(self, directory: Path):
+        self.directory = directory
+        self.directory.mkdir(exist_ok=True)
+
+    def list_presets(self) -> list[str]:
+        """Returns preset names (without .json), sorted alphabetically."""
+        return sorted(p.stem for p in self.directory.glob("*.json"))
+
+    def save(self, name: str, values: dict[int, int]) -> None:
+        """Writes {channel: value} to <name>.json."""
+        path = self.directory / f"{name}.json"
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(values, f, indent=2)
+
+    def load(self, name: str) -> dict[int, int]:
+        """Reads <name>.json back into {channel: value}."""
+        path = self.directory / f"{name}.json"
+        with path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return {int(ch): int(val) for ch, val in raw.items()}
+
+    def delete(self, name: str) -> None:
+        (self.directory / f"{name}.json").unlink(missing_ok=True)
+
+# ------------------------------------------------------------
+# Themed popups caz the tkinter.messagebox / simpledialog are boring
+# ------------------------------------------------------------
+class ThemedDialog(tk.Toplevel):
+    """Modal popup styled to match the app's color theme."""
+
+    def __init__(self, parent: tk.Tk, title: str, message: str, buttons: list[str], with_entry: bool = False):
+        super().__init__(parent)
+        self.title(title)
+        self.configure(bg=COLOR_BG)
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+
+        self.result: str | None = None
+        self.entry_value: str | None = None
+
+        ttk.Label(self, text=message, wraplength=280, justify="left").pack(
+            padx=20, pady=(20, 10)
+        )
+
+        if with_entry:
+            self.entry = ttk.Entry(self, width=30)
+            self.entry.pack(padx=20, pady=(0, 10))
+            self.entry.focus_set()
+            self.entry.bind("<Return>", lambda e: self._on_button(buttons[0]))
+
+        btn_row = ttk.Frame(self)
+        btn_row.pack(padx=20, pady=(0, 20))
+        for label in buttons:
+            ttk.Button(btn_row, text=label,
+                       command=lambda l=label: self._on_button(l)).pack(side="left", padx=5)
+
+        self.bind("<Escape>", lambda e: self._on_button(None))
+        self.protocol("WM_DELETE_WINDOW", lambda: self._on_button(None))
+
+        self.update_idletasks()
+        self._center_on(parent)
+        self.wait_window(self)
+
+    def _center_on(self, parent: tk.Tk) -> None:
+        x = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
+        self.geometry(f"+{x}+{y}")
+
+    def _on_button(self, label: str | None) -> None:
+        self.result = label
+        if hasattr(self, "entry"):
+            self.entry_value = self.entry.get()
+        self.grab_release()
+        self.destroy()
+
+
+def show_error(parent: tk.Tk, title: str, message: str) -> None:
+    ThemedDialog(parent, title, message, buttons=["OK"])
+
+
+def ask_yes_no(parent: tk.Tk, title: str, message: str) -> bool:
+    dlg = ThemedDialog(parent, title, message, buttons=["Yes", "No"])
+    return dlg.result == "Yes"
+
+
+def ask_string(parent: tk.Tk, title: str, message: str) -> str | None:
+    dlg = ThemedDialog(parent, title, message, buttons=["OK", "Cancel"], with_entry=True)
+    if dlg.result == "OK" and dlg.entry_value:
+        return dlg.entry_value
+    return None
+
+
 
 def main() -> None:
     root = tk.Tk()
-    app = DMXGuiApp(root)
+    app = DMXGUI(root)
     root.protocol("WM_DELETE_WINDOW", app.on_close)
     root.mainloop()
 
